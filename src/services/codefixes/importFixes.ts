@@ -19,11 +19,9 @@ namespace ts.codefix {
         moduleSpecifier?: string;
     }
 
-    export interface ImportCodeFixContext {
+    export interface ImportCodeFixContext extends TextChangesContext {
         host: LanguageServiceHost;
         symbolName: string;
-        newLineCharacter: string;
-        rulesProvider: formatting.RulesProvider;
         sourceFile: SourceFile;
         checker: TypeChecker;
         compilerOptions: CompilerOptions;
@@ -172,7 +170,7 @@ namespace ts.codefix {
     }
 
     export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, isDefault?: boolean, isNamespaceImport?: boolean): ImportCodeAction[] {
-        const existingDeclarations = getImportDeclarations(moduleSymbol, context);
+        const existingDeclarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
         if (existingDeclarations.length > 0) {
             // With an existing import statement, there are more than one actions the user can do.
             return getCodeActionsForExistingImport(moduleSymbol, context, symbolName, isDefault, isNamespaceImport, existingDeclarations);
@@ -182,10 +180,7 @@ namespace ts.codefix {
         }
     }
 
-    function getImportDeclarations(moduleSymbol: Symbol, context: ImportCodeFixContext) {
-        const { checker, sourceFile } = context;
-
-        const cachedImportDeclarations = context.cachedImportDeclarations || [];
+    function getImportDeclarations(moduleSymbol: Symbol, checker: TypeChecker, { imports }: SourceFile, cachedImportDeclarations: ImportDeclarationMap = []) {
         const moduleSymbolId = getUniqueSymbolId(moduleSymbol, checker);
 
         const cached = cachedImportDeclarations[moduleSymbolId];
@@ -193,12 +188,12 @@ namespace ts.codefix {
             return cached;
         }
 
-        const existingDeclarations = mapDefined(sourceFile.imports, importModuleSpecifier =>
+        const existingDeclarations = mapDefined(imports, importModuleSpecifier =>
             checker.getSymbolAtLocation(importModuleSpecifier) === moduleSymbol ? getImportDeclaration(importModuleSpecifier) : undefined);
         cachedImportDeclarations[moduleSymbolId] = existingDeclarations;
         return existingDeclarations;
 
-        function getImportDeclaration({ parent }: LiteralExpression): AnyImportSyntax {
+        function getImportDeclaration({ parent }: LiteralExpression): AnyImportSyntax | undefined {
             switch (parent.kind) {
                 case SyntaxKind.ImportDeclaration:
                     return parent as ImportDeclaration;
@@ -210,7 +205,7 @@ namespace ts.codefix {
         }
     }
 
-    function createChangeTracker(context: ImportCodeFixContext) {
+    function createChangeTracker(context: TextChangesContext): textChanges.ChangeTracker {
         return textChanges.ChangeTracker.fromContext(context);
     }
 
@@ -258,7 +253,7 @@ namespace ts.codefix {
         // are there are already a new line seperating code and import statements.
         return createCodeAction(
             Diagnostics.Import_0_from_1,
-            [symbolName, `"${moduleSpecifierWithoutQuotes}"`],
+            [symbolName, moduleSpecifierWithoutQuotes],
             changeTracker.getChanges(),
             "NewImport",
             moduleSpecifierWithoutQuotes
@@ -305,7 +300,7 @@ namespace ts.codefix {
         }
     }
 
-    function getModuleSpecifierForNewImport(sourceFile: SourceFile, moduleSymbol: Symbol, options: CompilerOptions, getCanonicalFileName: (file: string) => string, host: LanguageServiceHost) {
+    function getModuleSpecifierForNewImport(sourceFile: SourceFile, moduleSymbol: Symbol, options: CompilerOptions, getCanonicalFileName: (file: string) => string, host: LanguageServiceHost): string | undefined {
         const moduleFileName = moduleSymbol.valueDeclaration.getSourceFile().fileName;
         const sourceDirectory = getDirectoryPath(sourceFile.fileName);
 
@@ -376,7 +371,7 @@ namespace ts.codefix {
         return undefined;
     }
 
-    function tryGetModuleNameFromTypeRoots(options: CompilerOptions, host: LanguageServiceHost, getCanonicalFileName: (file: string) => string, moduleFileName: string): string | undefined {
+    function tryGetModuleNameFromTypeRoots(options: CompilerOptions, host: GetEffectiveTypeRootsHost, getCanonicalFileName: (file: string) => string, moduleFileName: string): string | undefined {
         const typeRoots = getEffectiveTypeRoots(options, host);
         if (!typeRoots) {
             return undefined;

@@ -4,9 +4,9 @@
 namespace ts.Completions {
     export type Log = (message: string) => void;
 
-    export type SymbolOriginInfo = { moduleSymbol: Symbol, isDefaultExport?: boolean };
+    interface SymbolOriginInfo { moduleSymbol: Symbol, isDefaultExport: boolean };
     // Sparse array, mapping symbol id -> SymbolOriginInfo
-    export type SymbolOriginInfoMap = SymbolOriginInfo[];
+    type SymbolOriginInfoMap = SymbolOriginInfo[];
 
     const enum KeywordCompletionFilters {
         None,
@@ -942,7 +942,7 @@ namespace ts.Completions {
                     for (const exportedSymbol of allExportedSymbols) {
                         if (exportedSymbol.name && !symbolIdMap[getUniqueSymbolId(exportedSymbol, typeChecker)] && startsWith(exportedSymbol.name.toLowerCase(), tokenTextLowerCase)) {
                             otherSourceFileExports.push(exportedSymbol);
-                            symbolToOriginInfoMap[getUniqueSymbolId(exportedSymbol, typeChecker)] = { moduleSymbol };
+                            symbolToOriginInfoMap[getUniqueSymbolId(exportedSymbol, typeChecker)] = { moduleSymbol, isDefaultExport: false };
                         }
                     }
                 }

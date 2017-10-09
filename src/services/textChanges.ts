@@ -190,7 +190,7 @@ namespace ts.textChanges {
         private changes: Change[] = [];
         private readonly newLineCharacter: string;
 
-        public static fromContext(context: RefactorContext | CodeFixContext | codefix.ImportCodeFixContext) {
+        public static fromContext(context: TextChangesContext): ChangeTracker {
             return new ChangeTracker(context.newLineCharacter === "\n" ? NewLineKind.LineFeed : NewLineKind.CarriageReturnLineFeed, context.rulesProvider);
         }
 

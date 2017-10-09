@@ -1,3 +1,5 @@
+/// <reference path="fourslash.ts" />
+
 // @Filename: /a/b/moduleFile.ts
 ////export const guitar = 10;
 
@@ -17,7 +19,7 @@
 
 verify.applyCodeActionFromCompletion("1", {
     name: "guitar",
-    description: 'Import guitar from "./moduleFile".', //todo: quotes
+    description: `Import 'guitar' from "./moduleFile".`,
     newFileContent: `import { guitar } from "./moduleFile";\r
 \r
 var x: `,
@@ -25,7 +27,7 @@ var x: `,
 
 verify.applyCodeActionFromCompletion("1", {
     name: "chetAtkins",
-    description: 'Import chetAtkins from "windyAndWarm".',
+    description: `Import 'chetAtkins' from "windyAndWarm".`,
     newFileContent: `import { guitar } from "./moduleFile";\r
 import { chetAtkins } from "windyAndWarm";\r
 \r
@@ -34,7 +36,8 @@ var x: `,
 
 verify.applyCodeActionFromCompletion("1", {
     name: "egyptianElla",
-    description: 'Import egyptianElla from "./defaultModuleFile".',
+    description: `Import 'egyptianElla' from "./defaultModuleFile".`,
+    // TODO: GH#18445
     newFileContent: `import { guitar } from "./moduleFile";\r
 import { chetAtkins } from "windyAndWarm";\r
 import egyptianElla from "./defaultModuleFile";\r

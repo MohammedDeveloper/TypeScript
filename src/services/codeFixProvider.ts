@@ -5,15 +5,19 @@ namespace ts {
         getCodeActions(context: CodeFixContext): CodeAction[] | undefined;
     }
 
-    export interface CodeFixContext {
+    //mv
+    export interface TextChangesContext {
+        newLineCharacter: string;
+        rulesProvider: formatting.RulesProvider;
+    }
+
+    export interface CodeFixContext extends TextChangesContext {
         errorCode: number;
         sourceFile: SourceFile;
         span: TextSpan;
         program: Program;
-        newLineCharacter: string;
         host: LanguageServiceHost;
         cancellationToken: CancellationToken;
-        rulesProvider: formatting.RulesProvider;
     }
 
     export namespace codefix {
