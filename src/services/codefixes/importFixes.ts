@@ -169,15 +169,21 @@ namespace ts.codefix {
         };
     }
 
-    export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, isDefault: boolean, isNamespaceImport: boolean): ImportCodeAction[] {
+    export const enum ImportKind {
+        Named,
+        Default,
+        Namespace,
+    }
+
+    export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, kind: ImportKind): ImportCodeAction[] {
         Debug.assert(context.symbolName === symbolName); //If true, don't pass as separate parameter.
         const existingDeclarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
         if (existingDeclarations.length > 0) {
             // With an existing import statement, there are more than one actions the user can do.
-            return getCodeActionsForExistingImport(moduleSymbol, context, symbolName, isDefault, isNamespaceImport, existingDeclarations);
+            return getCodeActionsForExistingImport(moduleSymbol, context, symbolName, kind, existingDeclarations);
         }
         else {
-            return [getCodeActionForNewImport(context, moduleSymbol, symbolName, isDefault, /*existingModuleSpecifier*/ undefined, isNamespaceImport)];
+            return [getCodeActionForNewImport(context, moduleSymbol, symbolName, kind, /*existingModuleSpecifier*/ undefined)];
         }
     }
 
@@ -216,9 +222,8 @@ namespace ts.codefix {
         context: ImportCodeFixContext,
         moduleSymbol: Symbol,
         symbolName: string,
-        isDefault: boolean,
+        kind: ImportKind,
         moduleSpecifier: string | undefined,
-        isNamespaceImport: boolean,
     ): ImportCodeAction {
         const { sourceFile, getCanonicalFileName, newLineCharacter, host, compilerOptions } = context;
         let lastImportDeclaration: Node;
@@ -237,11 +242,19 @@ namespace ts.codefix {
 
         const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier || getModuleSpecifierForNewImport(sourceFile, moduleSymbol, compilerOptions, getCanonicalFileName, host));
         const changeTracker = createChangeTracker(context);
-        const importClause = isDefault
-            ? createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined)
-            : isNamespaceImport
-                ? createImportClause(/*name*/ undefined, createNamespaceImport(createIdentifier(symbolName)))
-                : createImportClause(/*name*/ undefined, createNamedImports([createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName))]));
+        //TODO:neater
+        const importClause = (() => {
+            switch (kind) {
+                case ImportKind.Default:
+                    return createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined)
+                case ImportKind.Namespace:
+                    return createImportClause(/*name*/ undefined, createNamespaceImport(createIdentifier(symbolName)));
+                case ImportKind.Named:
+                    return createImportClause(/*name*/ undefined, createNamedImports([createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName))]));
+                default:
+                    Debug.fail();
+            }
+        })();
         const moduleSpecifierLiteral = createLiteral(moduleSpecifierWithoutQuotes);
         moduleSpecifierLiteral.singleQuote = getSingleQuoteStyleFromExistingImports(sourceFile);
         const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, importClause, moduleSpecifierLiteral);
@@ -543,7 +556,7 @@ namespace ts.codefix {
         return !pathIsRelative(relativePath) ? "./" + relativePath : relativePath;
     }
 
-    function getCodeActionsForExistingImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, isDefault: boolean, isNamespaceImport: boolean, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction[] {
+    function getCodeActionsForExistingImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, kind: ImportKind, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction[] {
         Debug.assert(context.symbolName === symbolName); //If true, don't pass as separate parameters!
         const { symbolName: name, sourceFile, symbolToken } = context;
         const { namespaceImportDeclaration, namedImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
@@ -561,7 +574,7 @@ namespace ts.codefix {
              */
             //TODO: above comment out of date, must handle default imports too.
             const changeTracker = createChangeTracker(context);
-            getTextChangeForImportClause(namedImportDeclaration.importClause, name, isDefault, sourceFile, changeTracker);
+            getTextChangeForImportClause(namedImportDeclaration.importClause, name, kind === ImportKind.Default, sourceFile, changeTracker); //TODO: test this with namespace import...
             const moduleSpecifierWithoutQuotes = stripQuotes(namedImportDeclaration.moduleSpecifier.getText());
             actions.push(createCodeAction(
                 Diagnostics.Add_0_to_existing_import_declaration_from_1,
@@ -573,7 +586,7 @@ namespace ts.codefix {
         }
         else {
             // we need to create a new import statement, but the existing module specifier can be reused.
-            actions.push(getCodeActionForNewImport(context, moduleSymbol, symbolName, isDefault, existingModuleSpecifier, isNamespaceImport));
+            actions.push(getCodeActionForNewImport(context, moduleSymbol, symbolName, kind, existingModuleSpecifier));
         }
         return actions;
     }
@@ -717,7 +730,7 @@ namespace ts.codefix {
             }
 
             importFixContext.symbolName = symbolName; //!!!!!!! TODO: fix this, make symbolName readonly
-            return getCodeActionForImport(symbol, importFixContext, symbolName, /*isDefault*/ false, /*isNamespaceImport*/ true);
+            return getCodeActionForImport(symbol, importFixContext, symbolName, ImportKind.Namespace);
         }
 
         const candidateModules = checker.getAmbientModules();
@@ -737,7 +750,7 @@ namespace ts.codefix {
                 if (localSymbol && localSymbol.escapedName === name && checkSymbolHasMeaning(localSymbol, currentTokenMeaning)) {
                     // check if this symbol is already used
                     const symbolId = getUniqueSymbolId(localSymbol, checker);
-                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, /*isDefault*/ true, /*isNamespaceImport*/ false));
+                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, ImportKind.Default));
                 }
             }
 
@@ -748,7 +761,7 @@ namespace ts.codefix {
             const exportSymbolWithIdenticalName = checker.tryGetMemberInModuleExportsAndProperties(name, moduleSymbol);
             if (exportSymbolWithIdenticalName && checkSymbolHasMeaning(exportSymbolWithIdenticalName, currentTokenMeaning)) {
                 const symbolId = getUniqueSymbolId(exportSymbolWithIdenticalName, checker);
-                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, /*isDefault*/ false, /*isNamespaceImport*/ false));
+                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, ImportKind.Named));
             }
         }
 
