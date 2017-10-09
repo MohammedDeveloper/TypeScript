@@ -180,10 +180,12 @@ namespace ts.codefix {
         const existingDeclarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
         if (existingDeclarations.length > 0) {
             // With an existing import statement, there are more than one actions the user can do.
-            return getCodeActionsForExistingImport(moduleSymbol, context, symbolName, kind, existingDeclarations);
+            return getCodeActionsForExistingImport(context, symbolName, kind, existingDeclarations);
         }
         else {
-            return [getCodeActionForNewImport(context, moduleSymbol, symbolName, kind, /*existingModuleSpecifier*/ undefined)];
+            //neater
+            const moduleSpecifier = getModuleSpecifierForNewImport(context.sourceFile, moduleSymbol, context.compilerOptions, context.getCanonicalFileName, context.host);
+            return [getCodeActionForNewImport(context, symbolName, kind, moduleSpecifier)];
         }
     }
 
@@ -219,13 +221,12 @@ namespace ts.codefix {
     }
 
     function getCodeActionForNewImport(
-        context: ImportCodeFixContext,
-        moduleSymbol: Symbol,
+        context: TextChangesContext & { sourceFile: SourceFile },
         symbolName: string,
         kind: ImportKind,
-        moduleSpecifier: string | undefined,
+        moduleSpecifier: string,
     ): ImportCodeAction {
-        const { sourceFile, getCanonicalFileName, newLineCharacter, host, compilerOptions } = context;
+        const { sourceFile, newLineCharacter } = context;
         let lastImportDeclaration: Node;
 
         if (!lastImportDeclaration) {
@@ -240,26 +241,11 @@ namespace ts.codefix {
             }
         }
 
-        const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier || getModuleSpecifierForNewImport(sourceFile, moduleSymbol, compilerOptions, getCanonicalFileName, host));
+        const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier);
+        const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, getImportClause(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
         const changeTracker = createChangeTracker(context);
-        //TODO:neater
-        const importClause = (() => {
-            switch (kind) {
-                case ImportKind.Default:
-                    return createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined)
-                case ImportKind.Namespace:
-                    return createImportClause(/*name*/ undefined, createNamespaceImport(createIdentifier(symbolName)));
-                case ImportKind.Named:
-                    return createImportClause(/*name*/ undefined, createNamedImports([createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName))]));
-                default:
-                    Debug.fail();
-            }
-        })();
-        const moduleSpecifierLiteral = createLiteral(moduleSpecifierWithoutQuotes);
-        moduleSpecifierLiteral.singleQuote = getSingleQuoteStyleFromExistingImports(sourceFile);
-        const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, importClause, moduleSpecifierLiteral);
         if (!lastImportDeclaration) {
-            changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${context.newLineCharacter}${context.newLineCharacter}` });
+            changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${newLineCharacter}${newLineCharacter}` });
         }
         else {
             changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
@@ -275,6 +261,25 @@ namespace ts.codefix {
             "NewImport",
             moduleSpecifierWithoutQuotes
         );
+    }
+
+    function createStringLiteral(sourceFile: SourceFile, text: string): StringLiteral {
+        const literal = createLiteral(text);
+        literal.singleQuote = getSingleQuoteStyleFromExistingImports(sourceFile);
+        return literal;
+    }
+
+    function getImportClause(kind: ImportKind, symbolName: string) {//name
+        switch (kind) {
+            case ImportKind.Default:
+                return createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined)
+            case ImportKind.Namespace:
+                return createImportClause(/*name*/ undefined, createNamespaceImport(createIdentifier(symbolName)));
+            case ImportKind.Named:
+                return createImportClause(/*name*/ undefined, createNamedImports([createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName))]));
+            default:
+                Debug.fail();
+        }
     }
 
     function getSourceFileImportLocation(node: SourceFile) {
@@ -556,7 +561,7 @@ namespace ts.codefix {
         return !pathIsRelative(relativePath) ? "./" + relativePath : relativePath;
     }
 
-    function getCodeActionsForExistingImport(moduleSymbol: Symbol, context: ImportCodeFixContext, symbolName: string, kind: ImportKind, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction[] {
+    function getCodeActionsForExistingImport(context: ImportCodeFixContext, symbolName: string, kind: ImportKind, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction[] {
         Debug.assert(context.symbolName === symbolName); //If true, don't pass as separate parameters!
         const { symbolName: name, sourceFile, symbolToken } = context;
         const { namespaceImportDeclaration, namedImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
@@ -566,7 +571,7 @@ namespace ts.codefix {
             actions.push(getCodeActionForNamespaceImport(namespaceImportDeclaration, name, sourceFile, symbolToken, context));
         }
 
-        if (!isNamespaceImport && namedImportDeclaration && namedImportDeclaration.importClause &&
+        if (kind !== ImportKind.Namespace && namedImportDeclaration && namedImportDeclaration.importClause &&
             (namedImportDeclaration.importClause.name || namedImportDeclaration.importClause.namedBindings)) {
             /**
              * If the existing import declaration already has a named import list, just
@@ -586,7 +591,7 @@ namespace ts.codefix {
         }
         else {
             // we need to create a new import statement, but the existing module specifier can be reused.
-            actions.push(getCodeActionForNewImport(context, moduleSymbol, symbolName, kind, existingModuleSpecifier));
+            actions.push(getCodeActionForNewImport(context, symbolName, kind, existingModuleSpecifier));
         }
         return actions;
     }
