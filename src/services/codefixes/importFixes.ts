@@ -184,18 +184,7 @@ namespace ts.codefix {
 
     export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
         const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
-        const { namespaceImportName } = getExistingImportDeclarationsInfo(declarations);
-
-        const regularAction = getCodeActionForAddImport(moduleSymbol, context, kind, declarations);
-        return context.symbolToken && namespaceImportName
-            ? [getCodeActionForUseExistingNamespaceImport(namespaceImportName, context), regularAction]
-            : [regularAction];
-    }
-    interface ExistingImportDeclarationsInfo {
-        readonly namespaceImportName: string | undefined;
-    }
-    //kill!
-    function getExistingImportDeclarationsInfo(declarations: ReadonlyArray<AnyImportSyntax>): ExistingImportDeclarationsInfo {
+        const actions: ImportCodeAction[] = [];
         // It is possible that multiple import statements with the same specifier exist in the file.
         // e.g.
         //
@@ -208,31 +197,23 @@ namespace ts.codefix {
         //     1. change "member3" to "ns.member3"
         //     2. add "member3" to the second import statement's import list
         // and it is up to the user to decide which one fits best.
-        let namespaceImportName: string | undefined;
         for (const declaration of declarations) {
-            if (declaration.kind === SyntaxKind.ImportDeclaration) {
-                const namedBindings = declaration.importClause && declaration.importClause.namedBindings;
-                if (namedBindings && namedBindings.kind === SyntaxKind.NamespaceImport) {
-                    // case:
-                    // import * as ns from "foo"
-                    namespaceImportName = namedBindings.name.text;
-                }
-            }
-            else {
-                // case:
-                // import foo = require("foo")
-                const { name } = declaration;
-                namespaceImportName = name.text;
+            const namespace = getNamespaceImportName(declaration);
+            if (namespace) {
+                actions.push(getCodeActionForUseExistingNamespaceImport(namespace.text, context));
             }
         }
-        return { namespaceImportName };
+        actions.push(getCodeActionForAddImport(moduleSymbol, context, kind, declarations));
+        return actions;
     }
 
-    //mv, inline?
-    function moduleSpecifierFromAnyImport(node: AnyImportSyntax): string | undefined {
-        const expression = node.kind === SyntaxKind.ImportDeclaration ? node.moduleSpecifier : node.moduleReference.kind === SyntaxKind.ExternalModuleReference ? node.moduleReference.expression : undefined;
-        if (expression && isStringLiteral(expression)) {
-            return expression.text;
+    function getNamespaceImportName(declaration: AnyImportSyntax): Identifier {
+        if (declaration.kind === SyntaxKind.ImportDeclaration) {
+            const namedBindings = declaration.importClause && declaration.importClause.namedBindings;
+            return namedBindings && namedBindings.kind === SyntaxKind.NamespaceImport ? namedBindings.name : undefined;
+        }
+        else {
+            return declaration.name;
         }
     }
 
@@ -617,6 +598,11 @@ namespace ts.codefix {
         return getCodeActionForNewImport(ctx, kind, moduleSpecifier);
     }
 
+    function moduleSpecifierFromAnyImport(node: AnyImportSyntax): string | undefined {
+        const expression = node.kind === SyntaxKind.ImportDeclaration ? node.moduleSpecifier : node.moduleReference.kind === SyntaxKind.ExternalModuleReference ? node.moduleReference.expression : undefined;
+        return expression && isStringLiteral(expression) ? expression.text : undefined;
+    }
+
     function tryUpdateExistingImport(context: SymbolContext, kind: ImportKind, importClause: ImportClause): FileTextChanges[] | undefined {
         const { symbolName, sourceFile } = context;
         const { name, namedBindings } = importClause;
@@ -738,8 +724,8 @@ namespace ts.codefix {
     }
 
     function eachCandidateModule(checker: TypeChecker, allSourceFiles: ReadonlyArray<SourceFile>, sourceFile: SourceFile, cb: (module: Symbol) => void) {
-        for (const amb of checker.getAmbientModules()) {
-            cb(amb);
+        for (const ambient of checker.getAmbientModules()) {
+            cb(ambient);
         }
         for (const otherSourceFile of allSourceFiles) {
             if (otherSourceFile !== sourceFile && isExternalOrCommonJsModule(otherSourceFile)) {
