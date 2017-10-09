@@ -4,7 +4,10 @@
 namespace ts.Completions {
     export type Log = (message: string) => void;
 
-    interface SymbolOriginInfo { moduleSymbol: Symbol, isDefaultExport: boolean };
+    interface SymbolOriginInfo {
+        moduleSymbol: Symbol;
+        isDefaultExport: boolean;
+    }
     // Sparse array, mapping symbol id -> SymbolOriginInfo
     type SymbolOriginInfoMap = SymbolOriginInfo[];
 
@@ -360,7 +363,8 @@ namespace ts.Completions {
                             sourceFile,
                             rulesProvider,
                             symbolName: symbol.name,
-                            getCanonicalFileName: createGetCanonicalFileName(useCaseSensitiveFileNames)
+                            getCanonicalFileName: createGetCanonicalFileName(useCaseSensitiveFileNames),
+                            symbolToken: undefined,
                         };
 
                         codeActions = codefix.getCodeActionForImport(symbolOriginInfo.moduleSymbol, context, symbolOriginInfo.isDefaultExport ? codefix.ImportKind.Default : codefix.ImportKind.Named);

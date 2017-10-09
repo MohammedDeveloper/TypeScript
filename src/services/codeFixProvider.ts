@@ -5,13 +5,7 @@ namespace ts {
         getCodeActions(context: CodeFixContext): CodeAction[] | undefined;
     }
 
-    //mv
-    export interface TextChangesContext {
-        newLineCharacter: string;
-        rulesProvider: formatting.RulesProvider;
-    }
-
-    export interface CodeFixContext extends TextChangesContext {
+    export interface CodeFixContext extends textChanges.TextChangesContext {
         errorCode: number;
         sourceFile: SourceFile;
         span: TextSpan;

@@ -228,8 +228,8 @@ namespace ts {
         getEncodedSemanticClassifications(fileName: string, span: TextSpan): Classifications;
 
         getCompletionsAtPosition(fileName: string, position: number): CompletionInfo;
-        //todo: mark `formattingOptions` as optional for back-compat?
-        getCompletionEntryDetails(fileName: string, position: number, entryName: string, options: FormatCodeOptions | FormatCodeSettings): CompletionEntryDetails;
+        // "options" is optional only for backwards-compatibility
+        getCompletionEntryDetails(fileName: string, position: number, entryName: string, options?: FormatCodeOptions | FormatCodeSettings): CompletionEntryDetails;
         getCompletionEntrySymbol(fileName: string, position: number, entryName: string): Symbol;
 
         getQuickInfoAtPosition(fileName: string, position: number): QuickInfo;
@@ -666,7 +666,7 @@ namespace ts {
          * be used in that case
          */
         replacementSpan?: TextSpan;
-        hasAction?: true; //why do we need this?
+        hasAction?: true;
     }
 
     export interface CompletionEntryDetails {

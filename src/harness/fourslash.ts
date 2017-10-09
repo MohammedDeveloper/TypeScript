@@ -2301,7 +2301,7 @@ namespace FourSlash {
 
             const details = this.getCompletionEntryDetails(options.name);
             if (details.codeActions.length !== 1) {
-                throw new Error("TODO"); //!
+                this.raiseError(`Expected one code action, got ${details.codeActions.length}`);
             }
 
             if (details.codeActions[0].description !== options.description) {

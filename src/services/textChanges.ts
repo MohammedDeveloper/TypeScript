@@ -186,6 +186,11 @@ namespace ts.textChanges {
         return s;
     }
 
+    export interface TextChangesContext {
+        newLineCharacter: string;
+        rulesProvider: formatting.RulesProvider;
+    }
+
     export class ChangeTracker {
         private changes: Change[] = [];
         private readonly newLineCharacter: string;

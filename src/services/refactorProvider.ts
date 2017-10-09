@@ -14,7 +14,7 @@ namespace ts {
         getAvailableActions(context: RefactorContext): ApplicableRefactorInfo[] | undefined;
     }
 
-    export interface RefactorContext extends TextChangesContext {
+    export interface RefactorContext extends textChanges.TextChangesContext {
         file: SourceFile;
         startPosition: number;
         endPosition?: number;
