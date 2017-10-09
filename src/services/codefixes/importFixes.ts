@@ -19,17 +19,16 @@ namespace ts.codefix {
         moduleSpecifier?: string;
     }
 
-    //?
-    interface SmallContext extends textChanges.TextChangesContext {
+    interface SymbolContext extends textChanges.TextChangesContext {
         sourceFile: SourceFile,
         symbolName: string,
     }
 
-    interface SmallishContext extends SmallContext {
+    interface SymbolAndTokenContext extends SymbolContext {
         symbolToken: Node | undefined;
     }
 
-    export interface ImportCodeFixContext extends SmallishContext {
+    export interface ImportCodeFixContext extends SymbolAndTokenContext {
         host: LanguageServiceHost;
         checker: TypeChecker;
         compilerOptions: CompilerOptions;
@@ -47,7 +46,6 @@ namespace ts.codefix {
         private symbolIdToActionMap: ImportCodeAction[][] = [];
 
         addAction(symbolId: number, newAction: ImportCodeAction) {
-            Debug.assert(!!newAction); //kill
             if (!newAction) {
                 return;
             }
@@ -149,7 +147,7 @@ namespace ts.codefix {
         diagnosticArgs: string[],
         changes: FileTextChanges[],
         kind: ImportCodeActionKind,
-        moduleSpecifier?: string): ImportCodeAction {
+        moduleSpecifier: string | undefined): ImportCodeAction {
         return {
             description: formatMessage.apply(undefined, [undefined, description].concat(<any[]>diagnosticArgs)),
             changes,
@@ -183,16 +181,7 @@ namespace ts.codefix {
     }
 
     export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
-        const existingDeclarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
-        if (existingDeclarations.length > 0) {
-            // With an existing import statement, there are more than one actions the user can do.
-            return getCodeActionsForExistingImport(context, kind, existingDeclarations);
-        }
-        else {
-            //neater
-            const moduleSpecifier = getModuleSpecifierForNewImport(context.sourceFile, moduleSymbol, context.compilerOptions, context.getCanonicalFileName, context.host);
-            return [getCodeActionForNewImport(context, kind, moduleSpecifier)];
-        }
+        return getCodeActionsForExistingImport(moduleSymbol, context, kind);
     }
 
     //TODO: this doesn't seem important to cache... just use an iterator instead of creating a new array.
@@ -223,11 +212,19 @@ namespace ts.codefix {
         }
     }
 
+    //mv?
     function createChangeTracker(context: textChanges.TextChangesContext): textChanges.ChangeTracker {
         return textChanges.ChangeTracker.fromContext(context);
     }
 
-    function getCodeActionForNewImport(context: SmallContext, kind: ImportKind, moduleSpecifier: string): ImportCodeAction {
+    //mv?
+    function withChangeTracker(context: textChanges.TextChangesContext, cb: (tracker: textChanges.ChangeTracker) => void): FileTextChanges[] {
+        const tracker = textChanges.ChangeTracker.fromContext(context);
+        cb(tracker);
+        return tracker.getChanges();
+    }
+
+    function getCodeActionForNewImport(context: SymbolContext, kind: ImportKind, moduleSpecifier: string): ImportCodeAction {
         const { sourceFile, newLineCharacter, symbolName } = context;
         let lastImportDeclaration: Node;
 
@@ -245,13 +242,14 @@ namespace ts.codefix {
 
         const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier);
         const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, getImportClause(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
-        const changeTracker = createChangeTracker(context);
-        if (!lastImportDeclaration) {
-            changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${newLineCharacter}${newLineCharacter}` });
-        }
-        else {
-            changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
-        }
+        const changes = withChangeTracker(context, changeTracker => {
+            if (!lastImportDeclaration) {
+                changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${newLineCharacter}${newLineCharacter}` });
+            }
+            else {
+                changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
+            }
+        });
 
         // if this file doesn't have any import statements, insert an import statement and then insert a new line
         // between the only import statement and user code. Otherwise just insert the statement because chances
@@ -259,7 +257,7 @@ namespace ts.codefix {
         return createCodeAction(
             Diagnostics.Import_0_from_1,
             [symbolName, moduleSpecifierWithoutQuotes],
-            changeTracker.getChanges(),
+            changes,
             "NewImport",
             moduleSpecifierWithoutQuotes
         );
@@ -564,113 +562,110 @@ namespace ts.codefix {
     }
 
     //neater (note: `kind` is kind of *new* import, not kind of existing import.)
-    function getCodeActionsForExistingImport(context: SmallishContext, kind: ImportKind, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction[] {
-        const { namespaceImportDeclaration, namedImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
+    function getCodeActionsForExistingImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
+        const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
+        const { namespaceImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
 
-        //name
-        const x = getCodeActionsForExistingImportWorker(context, kind, namedImportDeclaration, existingModuleSpecifier, declarations);
+        const regularAction = getCodeActionsForExistingImportWorker(moduleSymbol, context, kind, existingModuleSpecifier, declarations);
         if (context.symbolToken && namespaceImportDeclaration) {
-            return [getCodeActionForNamespaceImport(namespaceImportDeclaration, context), x];
+            return [getCodeActionForNamespaceImport(namespaceImportDeclaration, context), regularAction];
         }
-        return [x];
+        return [regularAction];
     }
 
-    function getCodeActionsForExistingImportWorker(context: SmallContext, kind: ImportKind, namedImportDeclaration: ImportDeclaration, existingModuleSpecifier: string, declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction {
-        const { symbolName, sourceFile } = context;
-        switch (kind) {
-            case ImportKind.Default: //better
-                for (const declaration of declarations) {
-                    if (declaration.kind !== SyntaxKind.ImportDeclaration) {
-                        continue;
-                    }
+    function getCodeActionsForExistingImportWorker(
+        moduleSymbol: Symbol,
+        ctx: ImportCodeFixContext,
+        kind: ImportKind,
+        existingModuleSpecifier: string | undefined,
+        declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction {
+        const fromExistingImport = forEach(declarations, declaration => {
+            if (declaration.kind === SyntaxKind.ImportDeclaration && declaration.importClause) {
+                const changes = tryUpdateExistingImport(ctx, kind, declaration.importClause);
+                if (changes) {
+                    const moduleSpecifierWithoutQuotes = stripQuotes(declaration.moduleSpecifier.getText());
+                    return createCodeAction(
+                        Diagnostics.Add_0_to_existing_import_declaration_from_1,
+                        [ctx.symbolName, moduleSpecifierWithoutQuotes],
+                        changes,
+                        "InsertingIntoExistingImport",
+                        moduleSpecifierWithoutQuotes);
+                }
+            }
+        });
+        if (fromExistingImport) {
+            return fromExistingImport;
+        }
 
-                    const { importClause } = declaration;
-                    if (!importClause.name) {
-                        const nu = createImportClause(createIdentifier(symbolName), importClause.namedBindings);
-                        //dup code in case ImportKind.Namespace
-                        return actionForAddToExisting(symbolName, declaration.moduleSpecifier, createChangeTracker(context).replaceNode(sourceFile, importClause, nu).getChanges());
-                    }
+        const moduleSpecifier = existingModuleSpecifier || getModuleSpecifierForNewImport(ctx.sourceFile, moduleSymbol, ctx.compilerOptions, ctx.getCanonicalFileName, ctx.host);
+        return getCodeActionForNewImport(ctx, kind, moduleSpecifier);
+    }
+
+    function tryUpdateExistingImport(context: SymbolContext, kind: ImportKind, importClause: ImportClause): FileTextChanges[] | undefined {
+        const { symbolName, sourceFile } = context;
+        const { name, namedBindings } = importClause;
+        switch (kind) {
+            case ImportKind.Default:
+                if (!name) {
+                    const nu = createImportClause(createIdentifier(symbolName), namedBindings);
+                    //dup code in case ImportKind.Namespace
+                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, nu));
                 }
                 break;
 
-            case ImportKind.Named:
-                if (namedImportDeclaration && namedImportDeclaration.importClause) {
+            case ImportKind.Named: {
+                const newImportSpecifier = createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName));
+                //test
+                //if namedBindings doesn't exist, create it
+                //if it does, update it
+                // case 1:
+                // original text: import default from "module"
+                // change to: import default, { name } from "module"
+                // case 2:
+                // original text: import {} from "module"
+                // change to: import { name } from "module"
+                if (namedBindings && namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length) {
+                    const changeTracker = createChangeTracker(context);
+                    /**
+                     * If the import list has one import per line, preserve that. Otherwise, insert on same line as last element
+                     *     import {
+                     *         foo
+                     *     } from "./module";
+                     */
+                    //combine comments
                     /**
                      * If the existing import declaration already has a named import list, just
                      * insert the identifier into that list.
                      */
-                    //TODO: above comment out of date, must handle default imports too.
-                    const changeTracker = createChangeTracker(context);
-                    getTextChangeForImportClause(namedImportDeclaration.importClause, symbolName, sourceFile, changeTracker); //TODO: test this with namespace import...
-                    return actionForAddToExisting(symbolName, namedImportDeclaration.moduleSpecifier, changeTracker.getChanges());
+                    changeTracker.insertNodeInListAfter(
+                        sourceFile,
+                        namedBindings.elements[namedBindings.elements.length - 1],
+                        newImportSpecifier);
+                    return changeTracker.getChanges();
+                } else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && !namedBindings.elements.length) {
+                    const newImportClause = createImportClause(name, createNamedImports([newImportSpecifier]));
+                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, newImportClause));
                 }
                 break;
+            }
 
             case ImportKind.Namespace:
                 //Test -- if a default import already, can also add a namespace import
-                for (const declaration of declarations) {
-                    if (declaration.kind !== SyntaxKind.ImportDeclaration) {
-                        continue;
-                    }
-
-                    const { importClause } = declaration;
-                    if (!importClause.namedBindings) {
-                        const nu = createImportClause(importClause.name, createNamespaceImport(createIdentifier(symbolName)));
-                        //neater, and test
-                        return actionForAddToExisting(symbolName, declaration.moduleSpecifier, createChangeTracker(context).replaceNode(sourceFile, importClause, nu).getChanges());
-                    }
+                if (!namedBindings) {
+                    const nu = createImportClause(name, createNamespaceImport(createIdentifier(symbolName)));
+                    //neater, and test
+                    //todo: all these 'actionForAddToExisting' calls should be combined
+                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, nu));
                 }
                 break;
 
             default:
                 Debug.assertNever(kind);
         }
-
-        // we need to create a new import statement, but the existing module specifier can be reused.
-        //!
-        return getCodeActionForNewImport(context, kind, existingModuleSpecifier);
-    }
-
-    //neater
-    function actionForAddToExisting(symbolName: string, moduleSpecifier: Expression, changes: FileTextChanges[]) {
-        const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier.getText());
-        return createCodeAction(
-            Diagnostics.Add_0_to_existing_import_declaration_from_1,
-            [symbolName, moduleSpecifierWithoutQuotes],
-            changes,
-            "InsertingIntoExistingImport",
-            moduleSpecifierWithoutQuotes);
-    }
-
-    function getTextChangeForImportClause(importClause: ImportClause, name: string, sourceFile: SourceFile, changeTracker: textChanges.ChangeTracker): void {
-        const importList = <NamedImports>importClause.namedBindings; //TODO: what makes this cast valid? make a test...
-        const newImportSpecifier = createImportSpecifier(/*propertyName*/ undefined, createIdentifier(name));
-        // case 1:
-        // original text: import default from "module"
-        // change to: import default, { name } from "module"
-        // case 2:
-        // original text: import {} from "module"
-        // change to: import { name } from "module"
-        if (!importList || importList.elements.length === 0) {
-            const newImportClause = createImportClause(importClause.name, createNamedImports([newImportSpecifier]));
-            changeTracker.replaceNode(sourceFile, importClause, newImportClause);
-        }
-        else {
-            /**
-             * If the import list has one import per line, preserve that. Otherwise, insert on same line as last element
-             *     import {
-             *         foo
-             *     } from "./module";
-             */
-            changeTracker.insertNodeInListAfter(
-                sourceFile,
-                importList.elements[importList.elements.length - 1],
-                newImportSpecifier);
-        }
     }
 
     //what does this do?
-    function getCodeActionForNamespaceImport(declaration: ImportDeclaration | ImportEqualsDeclaration, context: SmallishContext): ImportCodeAction {
+    function getCodeActionForNamespaceImport(declaration: ImportDeclaration | ImportEqualsDeclaration, context: SymbolAndTokenContext): ImportCodeAction {
         const namespacePrefix = stripQuotes(declaration.kind === SyntaxKind.ImportDeclaration
             ? (<NamespaceImport>declaration.importClause.namedBindings).name.getText()
             : declaration.name.getText());
@@ -690,15 +685,15 @@ namespace ts.codefix {
         return createCodeAction(
             Diagnostics.Change_0_to_1,
             [symbolName, `${namespacePrefix}.${symbolName}`],
-            createChangeTracker(context).replaceNode(sourceFile, symbolToken, createPropertyAccess(createIdentifier(namespacePrefix), symbolName)).getChanges(),
-            "CodeChange"
-        );
+            withChangeTracker(context, tracker =>
+                tracker.replaceNode(sourceFile, symbolToken, createPropertyAccess(createIdentifier(namespacePrefix), symbolName))),
+            "CodeChange",
+            /*moduleSpecifier*/ undefined);
     }
 
     interface ExistingImportDeclarationsInfo {
         readonly namespaceImportDeclaration: AnyImportSyntax | undefined;
-        readonly namedImportDeclaration: ImportDeclaration | undefined;
-        readonly existingModuleSpecifier: string;
+        readonly existingModuleSpecifier: string | undefined;
     }
     function getExistingImportDeclarationsInfo(declarations: ReadonlyArray<AnyImportSyntax>): ExistingImportDeclarationsInfo {
         // It is possible that multiple import statements with the same specifier exist in the file.
@@ -714,7 +709,6 @@ namespace ts.codefix {
         //     2. add "member3" to the second import statement's import list
         // and it is up to the user to decide which one fits best.
         let namespaceImportDeclaration: AnyImportSyntax | undefined;
-        let namedImportDeclaration: ImportDeclaration | undefined;
         let existingModuleSpecifier: string | undefined;
         for (const declaration of declarations) {
             if (declaration.kind === SyntaxKind.ImportDeclaration) {
@@ -723,13 +717,6 @@ namespace ts.codefix {
                     // case:
                     // import * as ns from "foo"
                     namespaceImportDeclaration = declaration;
-                }
-                else {
-                    // cases:
-                    // import default from "foo"
-                    // import { bar } from "foo" or combination with the first one
-                    // import "foo"
-                    namedImportDeclaration = declaration;
                 }
                 existingModuleSpecifier = declaration.moduleSpecifier.getText();
             }
@@ -741,8 +728,7 @@ namespace ts.codefix {
                 existingModuleSpecifier = (moduleReference.kind === SyntaxKind.ExternalModuleReference ? moduleReference.expression : moduleReference).getText();
             }
         }
-        Debug.assert(existingModuleSpecifier !== undefined); // Because `declarations` should be non-empty.
-        return { namespaceImportDeclaration, namedImportDeclaration, existingModuleSpecifier };
+        return { namespaceImportDeclaration, existingModuleSpecifier };
     }
 
     function getImportCodeActions(context: CodeFixContext): ImportCodeAction[] {
