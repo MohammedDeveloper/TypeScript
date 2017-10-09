@@ -16,7 +16,7 @@ namespace ts.codefix {
 
     interface ImportCodeAction extends CodeAction {
         kind: ImportCodeActionKind;
-        moduleSpecifier?: string; //why?
+        moduleSpecifier?: string;
     }
 
     //?
@@ -47,6 +47,7 @@ namespace ts.codefix {
         private symbolIdToActionMap: ImportCodeAction[][] = [];
 
         addAction(symbolId: number, newAction: ImportCodeAction) {
+            Debug.assert(!!newAction); //kill
             if (!newAction) {
                 return;
             }
