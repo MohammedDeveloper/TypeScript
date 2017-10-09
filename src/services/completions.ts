@@ -363,7 +363,7 @@ namespace ts.Completions {
                             getCanonicalFileName: createGetCanonicalFileName(useCaseSensitiveFileNames)
                         };
 
-                        codeActions = codefix.getCodeActionForImport(symbolOriginInfo.moduleSymbol, context, context.symbolName, symbolOriginInfo.isDefaultExport ? codefix.ImportKind.Default : codefix.ImportKind.Named);
+                        codeActions = codefix.getCodeActionForImport(symbolOriginInfo.moduleSymbol, context, symbolOriginInfo.isDefaultExport ? codefix.ImportKind.Default : codefix.ImportKind.Named);
                     }
                 }
 
