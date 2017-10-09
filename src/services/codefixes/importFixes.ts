@@ -184,11 +184,56 @@ namespace ts.codefix {
 
     export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
         const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
-        const { namespaceImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
-        const regularAction = getCodeActionForAddImport(moduleSymbol, context, kind, existingModuleSpecifier, declarations);
-        return context.symbolToken && namespaceImportDeclaration
-            ? [getCodeActionForUseExistingNamespaceImport(namespaceImportDeclaration, context), regularAction]
+        const { namespaceImportName } = getExistingImportDeclarationsInfo(declarations);
+
+        const regularAction = getCodeActionForAddImport(moduleSymbol, context, kind, declarations);
+        return context.symbolToken && namespaceImportName
+            ? [getCodeActionForUseExistingNamespaceImport(namespaceImportName, context), regularAction]
             : [regularAction];
+    }
+    interface ExistingImportDeclarationsInfo {
+        readonly namespaceImportName: string | undefined;
+    }
+    //kill!
+    function getExistingImportDeclarationsInfo(declarations: ReadonlyArray<AnyImportSyntax>): ExistingImportDeclarationsInfo {
+        // It is possible that multiple import statements with the same specifier exist in the file.
+        // e.g.
+        //
+        //     import * as ns from "foo";
+        //     import { member1, member2 } from "foo";
+        //
+        //     member3/**/ <-- cusor here
+        //
+        // in this case we should provie 2 actions:
+        //     1. change "member3" to "ns.member3"
+        //     2. add "member3" to the second import statement's import list
+        // and it is up to the user to decide which one fits best.
+        let namespaceImportName: string | undefined;
+        for (const declaration of declarations) {
+            if (declaration.kind === SyntaxKind.ImportDeclaration) {
+                const namedBindings = declaration.importClause && declaration.importClause.namedBindings;
+                if (namedBindings && namedBindings.kind === SyntaxKind.NamespaceImport) {
+                    // case:
+                    // import * as ns from "foo"
+                    namespaceImportName = namedBindings.name.text;
+                }
+            }
+            else {
+                // case:
+                // import foo = require("foo")
+                const { name } = declaration;
+                namespaceImportName = name.text;
+            }
+        }
+        return { namespaceImportName };
+    }
+
+    //mv, inline?
+    function moduleSpecifierFromAnyImport(node: AnyImportSyntax): string | undefined {
+        const expression = node.kind === SyntaxKind.ImportDeclaration ? node.moduleSpecifier : node.moduleReference.kind === SyntaxKind.ExternalModuleReference ? node.moduleReference.expression : undefined;
+        if (expression && isStringLiteral(expression)) {
+            return expression.text;
+        }
     }
 
     // TODO(anhans): This doesn't seem important to cache... just use an iterator instead of creating a new array?
@@ -548,7 +593,6 @@ namespace ts.codefix {
         moduleSymbol: Symbol,
         ctx: ImportCodeFixContext,
         kind: ImportKind,
-        existingModuleSpecifier: string | undefined,
         declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction {
         const fromExistingImport = forEach(declarations, declaration => {
             if (declaration.kind === SyntaxKind.ImportDeclaration && declaration.importClause) {
@@ -568,7 +612,8 @@ namespace ts.codefix {
             return fromExistingImport;
         }
 
-        const moduleSpecifier = existingModuleSpecifier || getModuleSpecifierForNewImport(ctx.sourceFile, moduleSymbol, ctx.compilerOptions, ctx.getCanonicalFileName, ctx.host);
+        const moduleSpecifier = forEach(declarations, moduleSpecifierFromAnyImport)
+            || getModuleSpecifierForNewImport(ctx.sourceFile, moduleSymbol, ctx.compilerOptions, ctx.getCanonicalFileName, ctx.host);
         return getCodeActionForNewImport(ctx, kind, moduleSpecifier);
     }
 
@@ -605,11 +650,7 @@ namespace ts.codefix {
         }
     }
 
-    function getCodeActionForUseExistingNamespaceImport(declaration: ImportDeclaration | ImportEqualsDeclaration, context: SymbolAndTokenContext): ImportCodeAction {
-        const namespacePrefix = stripQuotes(declaration.kind === SyntaxKind.ImportDeclaration
-            ? (<NamespaceImport>declaration.importClause.namedBindings).name.getText()
-            : declaration.name.getText());
-
+    function getCodeActionForUseExistingNamespaceImport(namespacePrefix: string, context: SymbolAndTokenContext): ImportCodeAction {
         const { symbolName, sourceFile, symbolToken } = context;
 
         /**
@@ -629,46 +670,6 @@ namespace ts.codefix {
                 tracker.replaceNode(sourceFile, symbolToken, createPropertyAccess(createIdentifier(namespacePrefix), symbolName))),
             "CodeChange",
             /*moduleSpecifier*/ undefined);
-    }
-
-    interface ExistingImportDeclarationsInfo {
-        readonly namespaceImportDeclaration: AnyImportSyntax | undefined;
-        readonly existingModuleSpecifier: string | undefined;
-    }
-    function getExistingImportDeclarationsInfo(declarations: ReadonlyArray<AnyImportSyntax>): ExistingImportDeclarationsInfo {
-        // It is possible that multiple import statements with the same specifier exist in the file.
-        // e.g.
-        //
-        //     import * as ns from "foo";
-        //     import { member1, member2 } from "foo";
-        //
-        //     member3/**/ <-- cusor here
-        //
-        // in this case we should provie 2 actions:
-        //     1. change "member3" to "ns.member3"
-        //     2. add "member3" to the second import statement's import list
-        // and it is up to the user to decide which one fits best.
-        let namespaceImportDeclaration: AnyImportSyntax | undefined;
-        let existingModuleSpecifier: string | undefined;
-        for (const declaration of declarations) {
-            if (declaration.kind === SyntaxKind.ImportDeclaration) {
-                const namedBindings = declaration.importClause && declaration.importClause.namedBindings;
-                if (namedBindings && namedBindings.kind === SyntaxKind.NamespaceImport) {
-                    // case:
-                    // import * as ns from "foo"
-                    namespaceImportDeclaration = declaration;
-                }
-                existingModuleSpecifier = declaration.moduleSpecifier.getText();
-            }
-            else {
-                // case:
-                // import foo = require("foo")
-                namespaceImportDeclaration = declaration;
-                const { moduleReference } = declaration;
-                existingModuleSpecifier = (moduleReference.kind === SyntaxKind.ExternalModuleReference ? moduleReference.expression : moduleReference).getText();
-            }
-        }
-        return { namespaceImportDeclaration, existingModuleSpecifier };
     }
 
     function getImportCodeActions(context: CodeFixContext): ImportCodeAction[] {
