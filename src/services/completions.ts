@@ -8,7 +8,10 @@ namespace ts.Completions {
         moduleSymbol: Symbol;
         isDefaultExport: boolean;
     }
-    // Sparse array, mapping symbol id -> SymbolOriginInfo
+    /**
+     * Map from symbol id -> SymbolOriginInfo.
+     * Only populated for symbols that come from other modules.
+     */
     type SymbolOriginInfoMap = SymbolOriginInfo[];
 
     const enum KeywordCompletionFilters {
@@ -150,7 +153,7 @@ namespace ts.Completions {
     }
 
     function getCompletionEntriesFromSymbols(
-        symbols: Symbol[],
+        symbols: ReadonlyArray<Symbol>,
         entries: Push<CompletionEntry>,
         location: Node,
         performCharacterChecks: boolean,
@@ -334,8 +337,8 @@ namespace ts.Completions {
         position: number,
         entryName: string,
         allSourceFiles: ReadonlyArray<SourceFile>,
-        host?: LanguageServiceHost,
-        rulesProvider?: formatting.RulesProvider,
+        host: LanguageServiceHost,
+        rulesProvider: formatting.RulesProvider,
     ): CompletionEntryDetails {
 
         // Compute all the completion symbols again.
@@ -350,25 +353,22 @@ namespace ts.Completions {
             const symbol = forEach(symbols, s => getCompletionEntryDisplayNameForSymbol(s, compilerOptions.target, /*performCharacterChecks*/ false, allowStringLiteral) === entryName ? s : undefined);
 
             if (symbol) {
-                let codeActions: CodeAction[];
-                if (host && rulesProvider) {
-                    const symbolOriginInfo = symbolToOriginInfoMap[getUniqueSymbolId(symbol, typeChecker)];
-                    if (symbolOriginInfo) {
-                        const useCaseSensitiveFileNames = host.useCaseSensitiveFileNames ? host.useCaseSensitiveFileNames() : false;
-                        const context: codefix.ImportCodeFixContext = {
-                            host,
-                            checker: typeChecker,
-                            newLineCharacter: host.getNewLine(),
-                            compilerOptions,
-                            sourceFile,
-                            rulesProvider,
-                            symbolName: symbol.name,
-                            getCanonicalFileName: createGetCanonicalFileName(useCaseSensitiveFileNames),
-                            symbolToken: undefined,
-                        };
-
-                        codeActions = codefix.getCodeActionForImport(symbolOriginInfo.moduleSymbol, context, symbolOriginInfo.isDefaultExport ? codefix.ImportKind.Default : codefix.ImportKind.Named);
-                    }
+                let codeActions: CodeAction[] | undefined;
+                const symbolOriginInfo = symbolToOriginInfoMap[getUniqueSymbolId(symbol, typeChecker)];
+                if (symbolOriginInfo) {
+                    const { moduleSymbol, isDefaultExport } = symbolOriginInfo;
+                    codeActions = codefix.getCodeActionForImport(moduleSymbol, {
+                        host,
+                        checker: typeChecker,
+                        newLineCharacter: host.getNewLine(),
+                        compilerOptions,
+                        sourceFile,
+                        rulesProvider,
+                        symbolName: symbol.name,
+                        getCanonicalFileName: createGetCanonicalFileName(host.useCaseSensitiveFileNames ? host.useCaseSensitiveFileNames() : false),
+                        symbolToken: undefined,
+                        kind: isDefaultExport ? codefix.ImportKind.Default : codefix.ImportKind.Named,
+                    });
                 }
 
                 const { displayParts, documentation, symbolKind, tags } = SymbolDisplay.getSymbolDisplayPartsDocumentationAndSymbolKind(typeChecker, symbol, sourceFile, location, location, SemanticMeaning.All);
@@ -379,7 +379,7 @@ namespace ts.Completions {
                     displayParts,
                     documentation,
                     tags,
-                    codeActions
+                    codeActions,
                 };
             }
         }
@@ -397,7 +397,7 @@ namespace ts.Completions {
                 displayParts: [displayPart(entryName, SymbolDisplayPartKind.keyword)],
                 documentation: undefined,
                 tags: undefined,
-                codeActions: undefined
+                codeActions: undefined,
             };
         }
 
@@ -423,7 +423,7 @@ namespace ts.Completions {
         // We don't need to perform character checks here because we're only comparing the
         // name against 'entryName' (which is known to be good), not building a new
         // completion entry.
-        return forEach(symbols, s => getCompletionEntryDisplayNameForSymbol(s, compilerOptions.target, /*performCharacterChecks*/ false, allowStringLiteral) === entryName ? s : undefined);
+        return find(symbols, s => getCompletionEntryDisplayNameForSymbol(s, compilerOptions.target, /*performCharacterChecks*/ false, allowStringLiteral) === entryName);
     }
 
     interface CompletionData {
@@ -611,6 +611,7 @@ namespace ts.Completions {
                             break;
                         }
                     // falls through
+
                     case SyntaxKind.JsxSelfClosingElement:
                     case SyntaxKind.JsxElement:
                     case SyntaxKind.JsxOpeningElement:
@@ -842,14 +843,15 @@ namespace ts.Completions {
 
             const symbolMeanings = SymbolFlags.Type | SymbolFlags.Value | SymbolFlags.Namespace | SymbolFlags.Alias;
 
-            symbols = typeChecker.getSymbolsInScope(scopeNode, symbolMeanings);
-            symbols.push(...getSymbolsFromOtherSourceFileExports(symbols, previousToken === undefined ? "" : previousToken.getText()));
-            symbols = filterGlobalCompletion(symbols);
+            symbols = filterGlobalCompletion([
+                ...typeChecker.getSymbolsInScope(scopeNode, symbolMeanings),
+                ...getSymbolsFromOtherSourceFileExports(symbols, previousToken === undefined ? "" : previousToken.getText()),
+            ]);
 
             return true;
         }
 
-        function filterGlobalCompletion(symbols: Symbol[]) {
+        function filterGlobalCompletion(symbols: Symbol[]): Symbol[] {
             return filter(symbols, symbol => {
                 if (!isSourceFile(location)) {
                     // export = /**/ here we want to get all meanings, so any symbol is ok

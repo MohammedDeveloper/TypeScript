@@ -30,12 +30,16 @@ namespace ts.codefix {
         symbolToken: Node | undefined;
     }
 
-    export interface ImportCodeFixContext extends SymbolAndTokenContext {
+    interface ImportCodeFixContext extends SymbolAndTokenContext {
         host: LanguageServiceHost;
         checker: TypeChecker;
         compilerOptions: CompilerOptions;
         getCanonicalFileName: (fileName: string) => string;
         cachedImportDeclarations?: ImportDeclarationMap;
+    }
+
+    export interface ImportCodeFixOptions extends ImportCodeFixContext {
+        kind: ImportKind;
     }
 
     const enum ModuleSpecifierComparison {
@@ -182,7 +186,7 @@ namespace ts.codefix {
         Namespace,
     }
 
-    export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
+    export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixOptions): ImportCodeAction[] {
         const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
         const actions: ImportCodeAction[] = [];
         // It is possible that multiple import statements with the same specifier exist in the file.
@@ -203,7 +207,7 @@ namespace ts.codefix {
                 actions.push(getCodeActionForUseExistingNamespaceImport(namespace.text, context));
             }
         }
-        actions.push(getCodeActionForAddImport(moduleSymbol, context, kind, declarations));
+        actions.push(getCodeActionForAddImport(moduleSymbol, context, declarations));
         return actions;
     }
 
@@ -245,7 +249,7 @@ namespace ts.codefix {
         }
     }
 
-    function getCodeActionForNewImport(context: SymbolContext, kind: ImportKind, moduleSpecifier: string): ImportCodeAction {
+    function getCodeActionForNewImport(context: SymbolContext & { kind: ImportKind }, moduleSpecifier: string): ImportCodeAction {
         const { sourceFile, newLineCharacter, symbolName } = context;
         const lastImportDeclaration = findLast(sourceFile.statements, isAnyImportSyntax);
 
@@ -572,12 +576,11 @@ namespace ts.codefix {
 
     function getCodeActionForAddImport(
         moduleSymbol: Symbol,
-        ctx: ImportCodeFixContext,
-        kind: ImportKind,
+        ctx: ImportCodeFixOptions,
         declarations: ReadonlyArray<AnyImportSyntax>): ImportCodeAction {
         const fromExistingImport = forEach(declarations, declaration => {
             if (declaration.kind === SyntaxKind.ImportDeclaration && declaration.importClause) {
-                const changes = tryUpdateExistingImport(ctx, kind, declaration.importClause);
+                const changes = tryUpdateExistingImport(ctx, ctx.kind, declaration.importClause);
                 if (changes) {
                     const moduleSpecifierWithoutQuotes = stripQuotes(declaration.moduleSpecifier.getText());
                     return createCodeAction(
@@ -595,7 +598,7 @@ namespace ts.codefix {
 
         const moduleSpecifier = forEach(declarations, moduleSpecifierFromAnyImport)
             || getModuleSpecifierForNewImport(ctx.sourceFile, moduleSymbol, ctx.compilerOptions, ctx.getCanonicalFileName, ctx.host);
-        return getCodeActionForNewImport(ctx, kind, moduleSpecifier);
+        return getCodeActionForNewImport(ctx, moduleSpecifier);
     }
 
     function moduleSpecifierFromAnyImport(node: AnyImportSyntax): string | undefined {
@@ -665,14 +668,14 @@ namespace ts.codefix {
             : getActionsForRegularImport(importFixContext, context.program.getSourceFiles(), context.cancellationToken);
     }
 
-    function getActionsForUMDImport(importFixContext: ImportCodeFixContext): ImportCodeAction[] {
-        const { checker, symbolToken } = importFixContext;
+    function getActionsForUMDImport(context: ImportCodeFixContext): ImportCodeAction[] {
+        const { checker, symbolToken } = context;
         const umdSymbol = checker.getSymbolAtLocation(symbolToken);
         let symbol: ts.Symbol;
         let symbolName: string;
         if (umdSymbol.flags & ts.SymbolFlags.Alias) {
             symbol = checker.getAliasedSymbol(umdSymbol);
-            symbolName = importFixContext.symbolName;
+            symbolName = context.symbolName;
         }
         else if (isJsxOpeningLikeElement(symbolToken.parent) && symbolToken.parent.tagName === symbolToken) {
             // The error wasn't for the symbolAtLocation, it was for the JSX tag itself, which needs access to e.g. `React`.
@@ -683,7 +686,7 @@ namespace ts.codefix {
             Debug.fail("Either the symbol or the JSX namespace should be a UMD global if we got here");
         }
 
-        return getCodeActionForImport(symbol, { ...importFixContext, symbolName }, ImportKind.Namespace);
+        return getCodeActionForImport(symbol, { ...context, symbolName, kind: ImportKind.Namespace });
     }
 
     function getActionsForRegularImport(context: ImportCodeFixContext, allSourceFiles: ReadonlyArray<SourceFile>, cancellationToken: CancellationToken): ImportCodeAction[] {
@@ -700,7 +703,7 @@ namespace ts.codefix {
                 if (localSymbol && localSymbol.escapedName === symbolName && checkSymbolHasMeaning(localSymbol, currentTokenMeaning)) {
                     // check if this symbol is already used
                     const symbolId = getUniqueSymbolId(localSymbol, checker);
-                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, context, ImportKind.Default));
+                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, { ...context, kind: ImportKind.Default }));
                 }
             }
 
@@ -711,7 +714,7 @@ namespace ts.codefix {
             const exportSymbolWithIdenticalName = checker.tryGetMemberInModuleExportsAndProperties(symbolName, moduleSymbol);
             if (exportSymbolWithIdenticalName && checkSymbolHasMeaning(exportSymbolWithIdenticalName, currentTokenMeaning)) {
                 const symbolId = getUniqueSymbolId(exportSymbolWithIdenticalName, checker);
-                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, context, ImportKind.Named));
+                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, { ...context, kind: ImportKind.Named }));
             }
         });
 
