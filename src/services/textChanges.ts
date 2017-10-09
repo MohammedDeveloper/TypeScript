@@ -199,6 +199,12 @@ namespace ts.textChanges {
             return new ChangeTracker(context.newLineCharacter === "\n" ? NewLineKind.LineFeed : NewLineKind.CarriageReturnLineFeed, context.rulesProvider);
         }
 
+        public static with(context: TextChangesContext, cb: (tracker: ChangeTracker) => void): FileTextChanges[] {
+            const tracker = ChangeTracker.fromContext(context);
+            cb(tracker);
+            return tracker.getChanges();
+        }
+
         constructor(
             private readonly newLine: NewLineKind,
             private readonly rulesProvider: formatting.RulesProvider,

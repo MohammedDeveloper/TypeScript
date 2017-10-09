@@ -1,5 +1,7 @@
 /* @internal */
 namespace ts.codefix {
+    import ChangeTracker = textChanges.ChangeTracker;
+
     registerCodeFix({
         errorCodes: [
             Diagnostics.Cannot_find_name_0.code,
@@ -212,18 +214,6 @@ namespace ts.codefix {
         }
     }
 
-    //mv?
-    function createChangeTracker(context: textChanges.TextChangesContext): textChanges.ChangeTracker {
-        return textChanges.ChangeTracker.fromContext(context);
-    }
-
-    //mv?
-    function withChangeTracker(context: textChanges.TextChangesContext, cb: (tracker: textChanges.ChangeTracker) => void): FileTextChanges[] {
-        const tracker = textChanges.ChangeTracker.fromContext(context);
-        cb(tracker);
-        return tracker.getChanges();
-    }
-
     function getCodeActionForNewImport(context: SymbolContext, kind: ImportKind, moduleSpecifier: string): ImportCodeAction {
         const { sourceFile, newLineCharacter, symbolName } = context;
         let lastImportDeclaration: Node;
@@ -242,12 +232,12 @@ namespace ts.codefix {
 
         const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier);
         const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, getImportClause(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
-        const changes = withChangeTracker(context, changeTracker => {
-            if (!lastImportDeclaration) {
-                changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${newLineCharacter}${newLineCharacter}` });
+        const changes = ChangeTracker.with(context, changeTracker => {
+            if (lastImportDeclaration) {
+                changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
             }
             else {
-                changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
+                changeTracker.insertNodeAt(sourceFile, getSourceFileImportLocation(sourceFile), importDecl, { suffix: `${newLineCharacter}${newLineCharacter}` });
             }
         });
 
@@ -609,42 +599,21 @@ namespace ts.codefix {
                 if (!name) {
                     const nu = createImportClause(createIdentifier(symbolName), namedBindings);
                     //dup code in case ImportKind.Namespace
-                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, nu));
+                    return ChangeTracker.with(context, t => t.replaceNode(sourceFile, importClause, nu));
                 }
                 break;
 
             case ImportKind.Named: {
                 const newImportSpecifier = createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName));
-                //test
-                //if namedBindings doesn't exist, create it
-                //if it does, update it
-                // case 1:
-                // original text: import default from "module"
-                // change to: import default, { name } from "module"
-                // case 2:
-                // original text: import {} from "module"
-                // change to: import { name } from "module"
-                if (namedBindings && namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length) {
-                    const changeTracker = createChangeTracker(context);
-                    /**
-                     * If the import list has one import per line, preserve that. Otherwise, insert on same line as last element
-                     *     import {
-                     *         foo
-                     *     } from "./module";
-                     */
-                    //combine comments
-                    /**
-                     * If the existing import declaration already has a named import list, just
-                     * insert the identifier into that list.
-                     */
-                    changeTracker.insertNodeInListAfter(
+                if (namedBindings && namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length !== 0) {
+                    // There are already named imports; add another.
+                    return ChangeTracker.with(context, t => t.insertNodeInListAfter(
                         sourceFile,
                         namedBindings.elements[namedBindings.elements.length - 1],
-                        newImportSpecifier);
-                    return changeTracker.getChanges();
-                } else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && !namedBindings.elements.length) {
-                    const newImportClause = createImportClause(name, createNamedImports([newImportSpecifier]));
-                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, newImportClause));
+                        newImportSpecifier));
+                } else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length === 0) {
+                    return ChangeTracker.with(context, t =>
+                        t.replaceNode(sourceFile, importClause, createImportClause(name, createNamedImports([newImportSpecifier]))));
                 }
                 break;
             }
@@ -655,7 +624,7 @@ namespace ts.codefix {
                     const nu = createImportClause(name, createNamespaceImport(createIdentifier(symbolName)));
                     //neater, and test
                     //todo: all these 'actionForAddToExisting' calls should be combined
-                    return withChangeTracker(context, t => t.replaceNode(sourceFile, importClause, nu));
+                    return ChangeTracker.with(context, t => t.replaceNode(sourceFile, importClause, nu));
                 }
                 break;
 
@@ -685,7 +654,7 @@ namespace ts.codefix {
         return createCodeAction(
             Diagnostics.Change_0_to_1,
             [symbolName, `${namespacePrefix}.${symbolName}`],
-            withChangeTracker(context, tracker =>
+            ChangeTracker.with(context, tracker =>
                 tracker.replaceNode(sourceFile, symbolToken, createPropertyAccess(createIdentifier(namespacePrefix), symbolName))),
             "CodeChange",
             /*moduleSpecifier*/ undefined);
