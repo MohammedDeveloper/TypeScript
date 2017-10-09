@@ -216,19 +216,7 @@ namespace ts.codefix {
 
     function getCodeActionForNewImport(context: SymbolContext, kind: ImportKind, moduleSpecifier: string): ImportCodeAction {
         const { sourceFile, newLineCharacter, symbolName } = context;
-        let lastImportDeclaration: Node;
-
-        if (!lastImportDeclaration) {
-            // insert after any existing imports
-            //TODO: pass this in as a parameter?
-            for (let i = sourceFile.statements.length - 1; i >= 0; i--) {
-                const statement = sourceFile.statements[i];
-                if (statement.kind === SyntaxKind.ImportEqualsDeclaration || statement.kind === SyntaxKind.ImportDeclaration) {
-                    lastImportDeclaration = statement;
-                    break;
-                }
-            }
-        }
+        const lastImportDeclaration = findLast(sourceFile.statements, isAnyImportSyntax);
 
         const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier);
         const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, getImportClause(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
@@ -611,7 +599,8 @@ namespace ts.codefix {
                         sourceFile,
                         namedBindings.elements[namedBindings.elements.length - 1],
                         newImportSpecifier));
-                } else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length === 0) {
+                }
+                else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length === 0) {
                     return ChangeTracker.with(context, t =>
                         t.replaceNode(sourceFile, importClause, createImportClause(name, createNamedImports([newImportSpecifier]))));
                 }

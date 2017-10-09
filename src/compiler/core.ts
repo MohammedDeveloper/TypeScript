@@ -257,6 +257,16 @@ namespace ts {
         return undefined;
     }
 
+    export function findLast<T>(array: ReadonlyArray<T>, predicate: (element: T, index: number) => boolean): T | undefined {
+        for (let i = array.length - 1; i >= 0; i--) {
+            const value = array[i];
+            if (predicate(value, i)) {
+                return value;
+            }
+        }
+        return undefined;
+    }
+
     /** Works like Array.prototype.findIndex, returning `-1` if no element satisfying the predicate is found. */
     export function findIndex<T>(array: ReadonlyArray<T>, predicate: (element: T, index: number) => boolean): number {
         for (let i = 0; i < array.length; i++) {
