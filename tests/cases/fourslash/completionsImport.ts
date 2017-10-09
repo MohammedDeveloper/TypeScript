@@ -5,7 +5,7 @@
 ////export function Test2() {}
 
 // @Filename: /b.ts
-////import { Test2 } from "./file1";
+////import { Test2 } from "./a";
 ////t/**/
 
 goTo.marker("");
@@ -14,7 +14,7 @@ verify.completionListContains("Test2", "import Test2", "", "alias", /*spanIndex*
 
 verify.applyCodeActionFromCompletion("", {
     name: "Test1",
-    description: "Add 'Test1' to existing import declaration from './file1'.",
-    newFileContent: `import { Test2, Test1 } from "./file1";
+    description: `Add 'Test1' to existing import declaration from "./a".`,
+    newFileContent: `import { Test2, Test1 } from "./a";
 t`,
 });

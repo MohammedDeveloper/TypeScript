@@ -28,7 +28,6 @@ verify.applyCodeActionFromCompletion("", {
     name: "ab",
     description: `Add 'ab' to existing import declaration from "./b".`,
     // TODO: GH#18445
-    // Also, bug!
     newFileContent: `import ab, { zang } from "./b";
 import aa from "./a";\r
 a;`,
