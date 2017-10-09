@@ -22,8 +22,8 @@ namespace ts.codefix {
     }
 
     interface SymbolContext extends textChanges.TextChangesContext {
-        sourceFile: SourceFile,
-        symbolName: string,
+        sourceFile: SourceFile;
+        symbolName: string;
     }
 
     interface SymbolAndTokenContext extends SymbolContext {
@@ -183,10 +183,15 @@ namespace ts.codefix {
     }
 
     export function getCodeActionForImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
-        return getCodeActionsForExistingImport(moduleSymbol, context, kind);
+        const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
+        const { namespaceImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
+        const regularAction = getCodeActionForAddImport(moduleSymbol, context, kind, existingModuleSpecifier, declarations);
+        return context.symbolToken && namespaceImportDeclaration
+            ? [getCodeActionForUseExistingNamespaceImport(namespaceImportDeclaration, context), regularAction]
+            : [regularAction];
     }
 
-    //TODO: this doesn't seem important to cache... just use an iterator instead of creating a new array.
+    // TODO(anhans): This doesn't seem important to cache... just use an iterator instead of creating a new array?
     function getImportDeclarations(moduleSymbol: Symbol, checker: TypeChecker, { imports }: SourceFile, cachedImportDeclarations: ImportDeclarationMap = []): ReadonlyArray<AnyImportSyntax> {
         const moduleSymbolId = getUniqueSymbolId(moduleSymbol, checker);
 
@@ -219,7 +224,7 @@ namespace ts.codefix {
         const lastImportDeclaration = findLast(sourceFile.statements, isAnyImportSyntax);
 
         const moduleSpecifierWithoutQuotes = stripQuotes(moduleSpecifier);
-        const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, getImportClause(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
+        const importDecl = createImportDeclaration(/*decorators*/ undefined, /*modifiers*/ undefined, createImportClauseOfKind(kind, symbolName), createStringLiteral(sourceFile, moduleSpecifierWithoutQuotes));
         const changes = ChangeTracker.with(context, changeTracker => {
             if (lastImportDeclaration) {
                 changeTracker.insertNodeAfter(sourceFile, lastImportDeclaration, importDecl, { suffix: newLineCharacter });
@@ -247,16 +252,16 @@ namespace ts.codefix {
         return literal;
     }
 
-    function getImportClause(kind: ImportKind, symbolName: string) {//name
+    function createImportClauseOfKind(kind: ImportKind, symbolName: string) {
         switch (kind) {
             case ImportKind.Default:
-                return createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined)
+                return createImportClause(createIdentifier(symbolName), /*namedBindings*/ undefined);
             case ImportKind.Namespace:
                 return createImportClause(/*name*/ undefined, createNamespaceImport(createIdentifier(symbolName)));
             case ImportKind.Named:
                 return createImportClause(/*name*/ undefined, createNamedImports([createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName))]));
             default:
-                Debug.fail();
+                Debug.assertNever(kind);
         }
     }
 
@@ -539,19 +544,7 @@ namespace ts.codefix {
         return !pathIsRelative(relativePath) ? "./" + relativePath : relativePath;
     }
 
-    //neater (note: `kind` is kind of *new* import, not kind of existing import.)
-    function getCodeActionsForExistingImport(moduleSymbol: Symbol, context: ImportCodeFixContext, kind: ImportKind): ImportCodeAction[] {
-        const declarations = getImportDeclarations(moduleSymbol, context.checker, context.sourceFile, context.cachedImportDeclarations);
-        const { namespaceImportDeclaration, existingModuleSpecifier } = getExistingImportDeclarationsInfo(declarations);
-
-        const regularAction = getCodeActionsForExistingImportWorker(moduleSymbol, context, kind, existingModuleSpecifier, declarations);
-        if (context.symbolToken && namespaceImportDeclaration) {
-            return [getCodeActionForNamespaceImport(namespaceImportDeclaration, context), regularAction];
-        }
-        return [regularAction];
-    }
-
-    function getCodeActionsForExistingImportWorker(
+    function getCodeActionForAddImport(
         moduleSymbol: Symbol,
         ctx: ImportCodeFixContext,
         kind: ImportKind,
@@ -584,12 +577,8 @@ namespace ts.codefix {
         const { name, namedBindings } = importClause;
         switch (kind) {
             case ImportKind.Default:
-                if (!name) {
-                    const nu = createImportClause(createIdentifier(symbolName), namedBindings);
-                    //dup code in case ImportKind.Namespace
-                    return ChangeTracker.with(context, t => t.replaceNode(sourceFile, importClause, nu));
-                }
-                break;
+                return name ? undefined : ChangeTracker.with(context, t =>
+                    t.replaceNode(sourceFile, importClause, createImportClause(createIdentifier(symbolName), namedBindings)));
 
             case ImportKind.Named: {
                 const newImportSpecifier = createImportSpecifier(/*propertyName*/ undefined, createIdentifier(symbolName));
@@ -600,30 +589,23 @@ namespace ts.codefix {
                         namedBindings.elements[namedBindings.elements.length - 1],
                         newImportSpecifier));
                 }
-                else if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length === 0) {
+                if (!namedBindings || namedBindings.kind === SyntaxKind.NamedImports && namedBindings.elements.length === 0) {
                     return ChangeTracker.with(context, t =>
                         t.replaceNode(sourceFile, importClause, createImportClause(name, createNamedImports([newImportSpecifier]))));
                 }
-                break;
+                return undefined;
             }
 
             case ImportKind.Namespace:
-                //Test -- if a default import already, can also add a namespace import
-                if (!namedBindings) {
-                    const nu = createImportClause(name, createNamespaceImport(createIdentifier(symbolName)));
-                    //neater, and test
-                    //todo: all these 'actionForAddToExisting' calls should be combined
-                    return ChangeTracker.with(context, t => t.replaceNode(sourceFile, importClause, nu));
-                }
-                break;
+                return namedBindings ? undefined : ChangeTracker.with(context, t =>
+                    t.replaceNode(sourceFile, importClause, createImportClause(name, createNamespaceImport(createIdentifier(symbolName)))));
 
             default:
                 Debug.assertNever(kind);
         }
     }
 
-    //what does this do?
-    function getCodeActionForNamespaceImport(declaration: ImportDeclaration | ImportEqualsDeclaration, context: SymbolAndTokenContext): ImportCodeAction {
+    function getCodeActionForUseExistingNamespaceImport(declaration: ImportDeclaration | ImportEqualsDeclaration, context: SymbolAndTokenContext): ImportCodeAction {
         const namespacePrefix = stripQuotes(declaration.kind === SyntaxKind.ImportDeclaration
             ? (<NamespaceImport>declaration.importClause.namedBindings).name.getText()
             : declaration.name.getText());
@@ -690,73 +672,78 @@ namespace ts.codefix {
     }
 
     function getImportCodeActions(context: CodeFixContext): ImportCodeAction[] {
-        const sourceFile = context.sourceFile;
-        const allSourceFiles = context.program.getSourceFiles();
         const importFixContext = convertToImportCodeFixContext(context);
+        return context.errorCode === Diagnostics._0_refers_to_a_UMD_global_but_the_current_file_is_a_module_Consider_adding_an_import_instead.code
+            ? getActionsForUMDImport(importFixContext)
+            : getActionsForRegularImport(importFixContext, context.program.getSourceFiles(), context.cancellationToken);
+    }
 
-        const checker = importFixContext.checker;
-        const token = importFixContext.symbolToken;
+    function getActionsForUMDImport(importFixContext: ImportCodeFixContext): ImportCodeAction[] {
+        const { checker, symbolToken } = importFixContext;
+        const umdSymbol = checker.getSymbolAtLocation(symbolToken);
+        let symbol: ts.Symbol;
+        let symbolName: string;
+        if (umdSymbol.flags & ts.SymbolFlags.Alias) {
+            symbol = checker.getAliasedSymbol(umdSymbol);
+            symbolName = importFixContext.symbolName;
+        }
+        else if (isJsxOpeningLikeElement(symbolToken.parent) && symbolToken.parent.tagName === symbolToken) {
+            // The error wasn't for the symbolAtLocation, it was for the JSX tag itself, which needs access to e.g. `React`.
+            symbol = checker.getAliasedSymbol(checker.resolveName(checker.getJsxNamespace(), symbolToken.parent.tagName, SymbolFlags.Value));
+            symbolName = symbol.name;
+        }
+        else {
+            Debug.fail("Either the symbol or the JSX namespace should be a UMD global if we got here");
+        }
+
+        return getCodeActionForImport(symbol, { ...importFixContext, symbolName }, ImportKind.Namespace);
+    }
+
+    function getActionsForRegularImport(context: ImportCodeFixContext, allSourceFiles: ReadonlyArray<SourceFile>, cancellationToken: CancellationToken): ImportCodeAction[] {
+        const { sourceFile, checker, symbolName, symbolToken } = context;
         const symbolIdActionMap = new ImportCodeActionMap();
-        const currentTokenMeaning = getMeaningFromLocation(token);
+        const currentTokenMeaning = getMeaningFromLocation(symbolToken);
 
-        if (context.errorCode === Diagnostics._0_refers_to_a_UMD_global_but_the_current_file_is_a_module_Consider_adding_an_import_instead.code) {
-            const umdSymbol = checker.getSymbolAtLocation(token);
-            let symbol: ts.Symbol;
-            let symbolName: string;
-            if (umdSymbol.flags & ts.SymbolFlags.Alias) {
-                symbol = checker.getAliasedSymbol(umdSymbol);
-                symbolName = importFixContext.symbolName;
-            }
-            else if (isJsxOpeningLikeElement(token.parent) && token.parent.tagName === token) {
-                // The error wasn't for the symbolAtLocation, it was for the JSX tag itself, which needs access to e.g. `React`.
-                symbol = checker.getAliasedSymbol(checker.resolveName(checker.getJsxNamespace(), token.parent.tagName, SymbolFlags.Value));
-                symbolName = symbol.name;
-            }
-            else {
-                Debug.fail("Either the symbol or the JSX namespace should be a UMD global if we got here");
-            }
-
-            importFixContext.symbolName = symbolName; //neater
-            return getCodeActionForImport(symbol, importFixContext, ImportKind.Namespace);
-        }
-
-        const candidateModules = checker.getAmbientModules();
-        for (const otherSourceFile of allSourceFiles) {
-            if (otherSourceFile !== sourceFile && isExternalOrCommonJsModule(otherSourceFile)) {
-                candidateModules.push(otherSourceFile.symbol);
-            }
-        }
-
-        for (const moduleSymbol of candidateModules) {
-            context.cancellationToken.throwIfCancellationRequested();
-
+        eachCandidateModule(checker, allSourceFiles, sourceFile, moduleSymbol => {
+            cancellationToken.throwIfCancellationRequested();
             // check the default export
             const defaultExport = checker.tryGetMemberInModuleExports("default", moduleSymbol);
             if (defaultExport) {
                 const localSymbol = getLocalSymbolForExportDefault(defaultExport);
-                if (localSymbol && localSymbol.escapedName === importFixContext.symbolName && checkSymbolHasMeaning(localSymbol, currentTokenMeaning)) {
+                if (localSymbol && localSymbol.escapedName === symbolName && checkSymbolHasMeaning(localSymbol, currentTokenMeaning)) {
                     // check if this symbol is already used
                     const symbolId = getUniqueSymbolId(localSymbol, checker);
-                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, ImportKind.Default));
+                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, context, ImportKind.Default));
                 }
             }
 
             // "default" is a keyword and not a legal identifier for the import, so we don't expect it here
-            Debug.assert(importFixContext.symbolName !== "default");
+            Debug.assert(symbolName !== "default");
 
             // check exports with the same name
-            const exportSymbolWithIdenticalName = checker.tryGetMemberInModuleExportsAndProperties(importFixContext.symbolName, moduleSymbol);
+            const exportSymbolWithIdenticalName = checker.tryGetMemberInModuleExportsAndProperties(symbolName, moduleSymbol);
             if (exportSymbolWithIdenticalName && checkSymbolHasMeaning(exportSymbolWithIdenticalName, currentTokenMeaning)) {
                 const symbolId = getUniqueSymbolId(exportSymbolWithIdenticalName, checker);
-                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, ImportKind.Named));
+                symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, context, ImportKind.Named));
             }
-        }
+        });
 
         return symbolIdActionMap.getAllActions();
 
         function checkSymbolHasMeaning(symbol: Symbol, meaning: SemanticMeaning) {
             const declarations = symbol.getDeclarations();
             return declarations ? some(symbol.declarations, decl => !!(getMeaningFromDeclaration(decl) & meaning)) : false;
+        }
+    }
+
+    function eachCandidateModule(checker: TypeChecker, allSourceFiles: ReadonlyArray<SourceFile>, sourceFile: SourceFile, cb: (module: Symbol) => void) {
+        for (const amb of checker.getAmbientModules()) {
+            cb(amb);
+        }
+        for (const otherSourceFile of allSourceFiles) {
+            if (otherSourceFile !== sourceFile && isExternalOrCommonJsModule(otherSourceFile)) {
+                cb(otherSourceFile.symbol);
+            }
         }
     }
 }
