@@ -601,7 +601,7 @@ namespace ts {
             this.logger = this.host;
         }
 
-        public forwardJSONCall(actionDescription: string, action: () => any): string {
+        public forwardJSONCall(actionDescription: string, action: () => {}): string {
             return forwardJSONCall(this.logger, actionDescription, action, this.logPerformance);
         }
 
@@ -898,7 +898,7 @@ namespace ts {
                 `getCompletionEntryDetails('${fileName}', ${position}, '${entryName}')`,
                 () => {
                     const localOptions: ts.FormatCodeOptions = JSON.parse(options);
-                    this.languageService.getCompletionEntryDetails(fileName, position, entryName, localOptions);
+                    return this.languageService.getCompletionEntryDetails(fileName, position, entryName, localOptions);
                 }
             );
         }
@@ -1033,7 +1033,7 @@ namespace ts {
             super(factory);
         }
 
-        private forwardJSONCall(actionDescription: string, action: () => any): any {
+        private forwardJSONCall(actionDescription: string, action: () => {}): any {
             return forwardJSONCall(this.logger, actionDescription, action, this.logPerformance);
         }
 

@@ -194,14 +194,16 @@ namespace ts.codefix {
         cachedImportDeclarations[moduleSymbolId] = existingDeclarations;
         return existingDeclarations;
 
-        function getImportDeclaration({ parent }: LiteralExpression): AnyImportSyntax {
+        function getImportDeclaration({ parent }: LiteralExpression): AnyImportSyntax | undefined {
             switch (parent.kind) {
                 case SyntaxKind.ImportDeclaration:
                     return parent as ImportDeclaration;
                 case SyntaxKind.ExternalModuleReference:
                     return (parent as ExternalModuleReference).parent;
                 default:
-                    Debug.fail();
+                    Debug.assert(parent.kind === SyntaxKind.ExportDeclaration);
+                    // Ignore these, can't add imports to them.
+                    return undefined;
             }
         }
     }
@@ -714,6 +716,7 @@ namespace ts.codefix {
                 Debug.fail("Either the symbol or the JSX namespace should be a UMD global if we got here");
             }
 
+            importFixContext.symbolName = symbolName; //!!!!!!! TODO: fix this, make symbolName readonly
             return getCodeActionForImport(symbol, importFixContext, symbolName, /*isDefault*/ false, /*isNamespaceImport*/ true);
         }
 
@@ -734,7 +737,7 @@ namespace ts.codefix {
                 if (localSymbol && localSymbol.escapedName === name && checkSymbolHasMeaning(localSymbol, currentTokenMeaning)) {
                     // check if this symbol is already used
                     const symbolId = getUniqueSymbolId(localSymbol, checker);
-                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, /*isDefault*/ false, /*isNamespaceImport*/ true));
+                    symbolIdActionMap.addActions(symbolId, getCodeActionForImport(moduleSymbol, importFixContext, name, /*isDefault*/ true, /*isNamespaceImport*/ false));
                 }
             }
 
